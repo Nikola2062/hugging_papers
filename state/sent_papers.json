@@ -1,0 +1,24 @@
+{
+  "sent": [
+    {
+      "arxiv_id": "2605.29707",
+      "title": "Domino: Decoupling Causal Modeling from Autoregressive Drafting in Speculative Decoding",
+      "sent_at": "2026-06-02T20:28:08.043990+00:00"
+    },
+    {
+      "arxiv_id": "2605.28556",
+      "title": "A Matter of TASTE: Improving Coverage and Difficulty of Agent Benchmarks",
+      "sent_at": "2026-06-02T20:29:26.133178+00:00"
+    },
+    {
+      "arxiv_id": "2606.02373",
+      "title": "Harness-1: Reinforcement Learning for Search Agents with State-Externalizing Harnesses",
+      "sent_at": "2026-06-02T20:29:32.561017+00:00"
+    },
+    {
+      "arxiv_id": "2605.30501",
+      "title": "Linear Ensembles Wash Away Watermarks: On the Fragility of Distributional Perturbations in LLMs",
+      "sent_at": "2026-06-02T20:29:38.670498+00:00"
+    }
+  ]
+}

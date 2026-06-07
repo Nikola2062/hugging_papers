@@ -25,7 +25,9 @@ import argparse
 import logging
 import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from . import state, telegram_sender
 from .fetcher import fetch_fresh
@@ -33,6 +35,10 @@ from .summarizer import summarize
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG_FILE = ROOT / "logs" / "run.log"
+
+# Mirrors scripts/com.user.hugging-papers.plist (daily 10:00 local). Override
+# with SCHEDULE_HOUR / SCHEDULE_MINUTE if the launchd schedule is changed.
+SCHEDULE_TZ = ZoneInfo("Europe/Berlin")
 
 
 def _setup_logging() -> None:
@@ -63,6 +69,38 @@ def _notify_error(log: logging.Logger, message: str, *, telegram_send: bool, tok
         telegram_sender.send_error(message, token=token, chat_ids=chat_ids)
     except Exception as e:
         log.exception("error notification failed: %s", e)
+
+
+def _next_run_at(now: datetime | None = None) -> datetime:
+    hour = int(os.environ.get("SCHEDULE_HOUR", "10"))
+    minute = int(os.environ.get("SCHEDULE_MINUTE", "0"))
+    now = (now or datetime.now(SCHEDULE_TZ)).astimezone(SCHEDULE_TZ)
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _notify_next_run(
+    log: logging.Logger,
+    *,
+    telegram_send: bool,
+    token: str | None,
+    chat_ids: str | None,
+) -> None:
+    label = _next_run_at().strftime("%a %Y-%m-%d %H:%M %Z")
+    log.info("next message scheduled for %s", label)
+    if not (telegram_send and token and chat_ids):
+        return
+    try:
+        telegram_sender.send(
+            f"⏰ Next message at {label}",
+            token=token,
+            chat_ids=chat_ids,
+            parse_mode=None,
+        )
+    except Exception as e:
+        log.exception("next-run notification failed: %s", e)
 
 
 def _run_digest(
@@ -188,6 +226,13 @@ def run(
         log.error("--telegram-send true requires --telegram-bot-token and --telegram-chat-id")
         return 2
 
+    _notify_next_run(
+        log,
+        telegram_send=telegram_send,
+        token=telegram_bot_token,
+        chat_ids=telegram_chat_id,
+    )
+
     try:
         if mode == "recap":
             return _run_recap(
@@ -216,6 +261,13 @@ def run(
             chat_ids=telegram_chat_id,
         )
         return 1
+    finally:
+        _notify_next_run(
+            log,
+            telegram_send=telegram_send,
+            token=telegram_bot_token,
+            chat_ids=telegram_chat_id,
+        )
 
 
 def main() -> None:

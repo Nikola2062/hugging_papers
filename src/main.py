@@ -24,7 +24,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -208,8 +210,9 @@ def _run_recap(
     return 0 if ok else 1
 
 
-def run(
+def _execute_once(
     *,
+    log: logging.Logger,
     deepseek_api_key: str,
     telegram_send: bool,
     telegram_bot_token: str | None,
@@ -219,20 +222,6 @@ def run(
     mode: str,
     recap_days: int,
 ) -> int:
-    _setup_logging()
-    log = logging.getLogger("main")
-
-    if telegram_send and (not telegram_bot_token or not telegram_chat_id):
-        log.error("--telegram-send true requires --telegram-bot-token and --telegram-chat-id")
-        return 2
-
-    _notify_next_run(
-        log,
-        telegram_send=telegram_send,
-        token=telegram_bot_token,
-        chat_ids=telegram_chat_id,
-    )
-
     try:
         if mode == "recap":
             return _run_recap(
@@ -261,6 +250,161 @@ def run(
             chat_ids=telegram_chat_id,
         )
         return 1
+
+
+_STOP_REQUESTED = False
+
+
+def _install_stop_handlers(log: logging.Logger) -> None:
+    def _handler(signum, _frame):
+        global _STOP_REQUESTED
+        _STOP_REQUESTED = True
+        log.info("received signal %s, stopping after current iteration", signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError):
+            # signal() only works in the main thread of the main interpreter.
+            pass
+
+
+def _sleep_until(target: datetime, log: logging.Logger) -> bool:
+    """Sleep in short chunks until `target`. Returns False if stop was requested."""
+    while not _STOP_REQUESTED:
+        now = datetime.now(SCHEDULE_TZ)
+        remaining = (target - now).total_seconds()
+        if remaining <= 0:
+            return True
+        chunk = min(remaining, 30.0)
+        time.sleep(chunk)
+    return False
+
+
+def _run_scheduler(
+    *,
+    log: logging.Logger,
+    deepseek_api_key: str,
+    telegram_send: bool,
+    telegram_bot_token: str | None,
+    telegram_chat_id: str | None,
+    min_upvotes: int,
+    attach_pdf: bool,
+    mode: str,
+    recap_days: int,
+    run_now: bool,
+) -> int:
+    _install_stop_handlers(log)
+
+    label = _next_run_at().strftime("%a %Y-%m-%d %H:%M %Z")
+    log.info("scheduler started; first run scheduled for %s (run_now=%s)", label, run_now)
+    if telegram_send and telegram_bot_token and telegram_chat_id:
+        try:
+            telegram_sender.send(
+                f"🟢 hugging_papers scheduler started — next run {label}",
+                token=telegram_bot_token,
+                chat_ids=telegram_chat_id,
+                parse_mode=None,
+            )
+        except Exception as e:
+            log.exception("scheduler start notification failed: %s", e)
+
+    last_exit = 0
+    first = True
+    while not _STOP_REQUESTED:
+        if first and run_now:
+            log.info("--run-now set, executing immediately before sleeping")
+        else:
+            target = _next_run_at()
+            log.info("sleeping until %s", target.strftime("%a %Y-%m-%d %H:%M %Z"))
+            if not _sleep_until(target, log):
+                break
+        first = False
+
+        if _STOP_REQUESTED:
+            break
+
+        _notify_next_run(
+            log,
+            telegram_send=telegram_send,
+            token=telegram_bot_token,
+            chat_ids=telegram_chat_id,
+        )
+        last_exit = _execute_once(
+            log=log,
+            deepseek_api_key=deepseek_api_key,
+            telegram_send=telegram_send,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            min_upvotes=min_upvotes,
+            attach_pdf=attach_pdf,
+            mode=mode,
+            recap_days=recap_days,
+        )
+        _notify_next_run(
+            log,
+            telegram_send=telegram_send,
+            token=telegram_bot_token,
+            chat_ids=telegram_chat_id,
+        )
+
+    log.info("scheduler stopped")
+    return last_exit
+
+
+def run(
+    *,
+    deepseek_api_key: str,
+    telegram_send: bool,
+    telegram_bot_token: str | None,
+    telegram_chat_id: str | None,
+    min_upvotes: int,
+    attach_pdf: bool,
+    mode: str,
+    recap_days: int,
+    schedule: bool = False,
+    run_now: bool = False,
+) -> int:
+    _setup_logging()
+    log = logging.getLogger("main")
+
+    if telegram_send and (not telegram_bot_token or not telegram_chat_id):
+        log.error("--telegram-send true requires --telegram-bot-token and --telegram-chat-id")
+        return 2
+
+    if schedule:
+        return _run_scheduler(
+            log=log,
+            deepseek_api_key=deepseek_api_key,
+            telegram_send=telegram_send,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            min_upvotes=min_upvotes,
+            attach_pdf=attach_pdf,
+            mode=mode,
+            recap_days=recap_days,
+            run_now=run_now,
+        )
+
+    _notify_next_run(
+        log,
+        telegram_send=telegram_send,
+        token=telegram_bot_token,
+        chat_ids=telegram_chat_id,
+    )
+
+    try:
+        return _execute_once(
+            log=log,
+            deepseek_api_key=deepseek_api_key,
+            telegram_send=telegram_send,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            min_upvotes=min_upvotes,
+            attach_pdf=attach_pdf,
+            mode=mode,
+            recap_days=recap_days,
+        )
     finally:
         _notify_next_run(
             log,
@@ -311,6 +455,19 @@ def main() -> None:
         default=7,
         help="Window (in days) for --mode recap (default: 7).",
     )
+    p.add_argument(
+        "--schedule",
+        action="store_true",
+        help=(
+            "Run as a long-lived scheduler that fires daily at SCHEDULE_HOUR:SCHEDULE_MINUTE "
+            "(Europe/Berlin, defaults to 10:00). Exits cleanly on SIGINT/SIGTERM."
+        ),
+    )
+    p.add_argument(
+        "--run-now",
+        action="store_true",
+        help="With --schedule, execute one run immediately before entering the sleep loop.",
+    )
     args = p.parse_args()
 
     sys.exit(
@@ -323,6 +480,8 @@ def main() -> None:
             attach_pdf=args.attach_pdf,
             mode=args.mode,
             recap_days=args.recap_days,
+            schedule=args.schedule,
+            run_now=args.run_now,
         )
     )
 

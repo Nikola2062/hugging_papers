@@ -123,3 +123,6 @@ json.decoder.JSONDecodeError: Expecting ',' delimiter: line 4 column 1717 (char 
 2026-06-02 22:29:32,892 INFO httpx :: HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 200 OK"
 2026-06-02 22:29:38,671 INFO main :: sent 2605.30501
 2026-06-04 21:26:19,632 INFO main :: recap: 4 entries in the last 7 days
+2026-06-07 10:39:07,511 INFO main :: next message scheduled for Mon 2026-06-08 10:00 CEST
+2026-06-07 10:39:07,513 INFO main :: recap: 4 entries in the last 7 days
+2026-06-07 10:39:07,513 INFO main :: next message scheduled for Mon 2026-06-08 10:00 CEST

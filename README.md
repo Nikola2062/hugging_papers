@@ -47,6 +47,11 @@ HF /api/daily_papers ──► fetcher.py ──► state.py (dedup) ──► t
    - `--mode digest|recap` (default `digest`) — `recap` skips the fetcher/DeepSeek and resends
      a "best of the week" using stored summaries.
    - `--recap-days` (default `7`) — window for `--mode recap`.
+   - `--schedule` — run as a long-lived daemon that fires the chosen mode daily at
+     `SCHEDULE_HOUR:SCHEDULE_MINUTE` (Europe/Berlin, defaults to `10:00`).
+     See section 7a below.
+   - `--run-now` — only meaningful with `--schedule`; execute one run immediately on start
+     before entering the sleep loop.
 
 5. **Dry-run** (no Telegram, no state write — just prints the summaries):
    ```sh
@@ -76,32 +81,48 @@ HF /api/daily_papers ──► fetcher.py ──► state.py (dedup) ──► t
        --telegram-chat-id "$TELEGRAM_CHAT_ID"
    ```
 
-7. **Schedule it for 10:00 daily** (macOS launchd):
+7. **Schedule it.** Three options — pick whichever fits your environment:
+
+   **a) Built-in scheduler (recommended, OS-agnostic).** `main.py` can run as a long-lived
+   daemon that fires once a day on its own. No launchd / cron needed.
+   ```sh
+   .venv/bin/python -m src.main \
+       --deepseek-api-key   "$DEEPSEEK_API_KEY" \
+       --telegram-bot-token "$TELEGRAM_BOT_TOKEN" \
+       --telegram-chat-id   "$TELEGRAM_CHAT_ID" \
+       --schedule
+   ```
+   - Default fire time is **10:00 Europe/Berlin**. Override via env vars:
+     `SCHEDULE_HOUR=8 SCHEDULE_MINUTE=30 .venv/bin/python -m src.main ... --schedule`
+   - Add `--run-now` to execute one digest immediately on start, then enter the daily loop.
+   - Sends a `🟢 scheduler started` ping to Telegram on startup; logs to `logs/run.log`.
+   - Exits cleanly on `Ctrl+C` / `SIGTERM` (responsive within ~30s).
+   - Run it under `nohup`, `tmux`, `screen`, or as a systemd unit on Linux to keep it alive
+     across logouts.
+
+   **b) macOS launchd** (legacy — fires the one-shot command daily):
    ```sh
    cp scripts/com.user.hugging-papers.plist ~/Library/LaunchAgents/
    launchctl load ~/Library/LaunchAgents/com.user.hugging-papers.plist
    ```
    Logs land in `logs/launchd.out` and `logs/launchd.err`.
 
-## Porting to a small Linux VPS later
+   **c) Linux cron** (legacy — fires the one-shot command daily):
+   ```sh
+   crontab -e
+   # add (replace credentials):
+   0 10 * * * cd /path/to/hugging_papers && .venv/bin/python -m src.main \
+       --deepseek-api-key sk-xxx \
+       --telegram-send true \
+       --telegram-bot-token 1234:abc \
+       --telegram-chat-id 12345 \
+       >> logs/cron.log 2>&1
+   ```
+   Or use `scripts/run_daily.sh`, which forwards `DEEPSEEK_API_KEY`, `TELEGRAM_BOT_TOKEN`,
+   `TELEGRAM_CHAT_ID`, and `TELEGRAM_SEND` from the environment to the CLI flags.
 
-The scheduler is the only Mac-specific piece. On a VPS:
-
-```sh
-# clone repo, set up venv as above, then
-crontab -e
-# add (replace credentials):
-0 10 * * * cd /path/to/hugging_papers && .venv/bin/python -m src.main \
-    --deepseek-api-key sk-xxx \
-    --telegram-send true \
-    --telegram-bot-token 1234:abc \
-    --telegram-chat-id 12345 \
-    >> logs/cron.log 2>&1
-```
-
-Or use `scripts/run_daily.sh`, which forwards `DEEPSEEK_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `TELEGRAM_SEND` from the environment to the CLI flags.
-
-Everything else (fetcher, summarizer, sender, state) is pure Python with no Mac dependencies.
+Everything else (fetcher, summarizer, sender, state) is pure Python with no platform-specific
+dependencies.
 
 ## TODO
 
@@ -116,7 +137,8 @@ Everything else (fetcher, summarizer, sender, state) is pure Python with no Mac 
 - [x] `scripts/run_daily.sh` + `scripts/com.user.hugging-papers.plist`
 - [x] End-to-end dry-run test
 - [ ] **User action**: fill in `.env` with real credentials
-- [ ] **User action**: load the launchd plist
+- [ ] **User action**: pick a scheduler — run `python -m src.main ... --schedule` under
+  nohup/tmux/systemd, or load the launchd plist / cron entry
 - [ ] Optional: prometheus/healthcheck ping if running on VPS
 - [ ] Optional: support inline PDF download + Telegram document attachment
 - [ ] Optional: weekly digest mode (Sunday recap of week's papers)
